@@ -1,4 +1,6 @@
-// 전국 날씨 + 미세먼지 지도 (Open-Meteo Forecast + Air Quality, API 키 불필요)
+// 전국 날씨 + 미세먼지 3D 지도 (Open-Meteo Forecast + Air Quality + three.js, API 키 불필요)
+import { createScene } from "./scene.js";
+
 const WX_API = "https://api.open-meteo.com/v1/forecast";
 const AQ_API = "https://air-quality-api.open-meteo.com/v1/air-quality";
 const REFRESH_MS = 10 * 60 * 1000;
@@ -75,46 +77,41 @@ async function fetchCurrent(points) {
   }));
 }
 
-// ---------- 지도 ----------
-const map = L.map("map", { zoomControl: false }).setView([36.2, 127.8], 7);
-L.control.zoom({ position: "bottomright" }).addTo(map);
-L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  maxZoom: 18,
-  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · <a href="https://open-meteo.com">Open-Meteo</a>',
-}).addTo(map);
-
-const pinLayer = L.layerGroup().addTo(map);
-let selectedRing = null;
+// ---------- 3D 지도 ----------
 let overview = [];     // fetchCurrent 결과
 let layer = "pm10";
+
+const scene = createScene({
+  container: $("scene"),
+  onPinClick: (p) => selectPlace(p),
+  onGroundClick: ({ lat, lon }) => pickGround(lat, lon),
+});
+scene.ready
+  .then(() => $("loading").remove())
+  .catch((e) => { $("loading").textContent = `3D 지도를 불러오지 못했습니다: ${e.message}`; });
+
+// 막대 높이: 값이 클수록 높게
+const BAR_HEIGHT = {
+  pm10: (v) => v * 0.012,
+  pm25: (v) => v * 0.025,
+  temp: (t) => (t + 15) * 0.05,
+};
 
 function pinInfo(d) {
   if (layer === "temp") {
     const t = d.w.temperature_2m;
-    return { color: tempColor(t), text: `${Math.round(t)}°` };
+    return { color: tempColor(t), text: `${Math.round(t)}°`, height: BAR_HEIGHT.temp(t) };
   }
   const v = layer === "pm10" ? d.a?.pm10 : d.a?.pm2_5;
   const g = grade(layer, v);
-  return { color: g?.color ?? "#999", text: v == null ? NA : Math.round(v) };
+  return { color: g?.color ?? "#999", text: v == null ? NA : Math.round(v), height: v == null ? 0.1 : BAR_HEIGHT[layer](v) };
 }
 
 function renderPins() {
-  pinLayer.clearLayers();
-  for (const d of overview) {
-    const { color, text } = pinInfo(d);
-    const el = document.createElement("div");
-    el.className = "pin";
-    el.style.background = color;
-    const name = document.createElement("small");
-    name.textContent = d.place.name;
-    const val = document.createElement("span");
-    val.textContent = `${wmo(d.w.weather_code)[0]} ${text}`;
-    el.append(name, val);
-    const icon = L.divIcon({ html: el, className: "pin-wrap", iconSize: [0, 0] });
-    L.marker([d.place.lat, d.place.lon], { icon })
-      .on("click", () => selectPlace(d.place))
-      .addTo(pinLayer);
-  }
+  scene.setPins(overview.map((d) => {
+    const { color, text, height } = pinInfo(d);
+    return { place: d.place, color, height, label: `${d.place.name} ${wmo(d.w.weather_code)[0]} ${text}` };
+  }));
   renderLegend();
 }
 
@@ -206,13 +203,10 @@ async function loadDetail() {
   }
 }
 
-function selectPlace(p, { fly = true } = {}) {
+function selectPlace(p, { fly = true, expand = true } = {}) {
   place = p;
-  selectedRing?.remove();
-  selectedRing = L.circleMarker([p.lat, p.lon], {
-    radius: 18, color: "#1b2a3a", weight: 3, fillOpacity: 0, interactive: false,
-  }).addTo(map);
-  if (fly) map.flyTo([p.lat, p.lon], Math.max(map.getZoom(), 9), { duration: 0.8 });
+  if (expand && typeof setCollapsed === "function") setCollapsed(false); // 선택하면 상세 정보를 펼침
+  scene.select(p, { fly });
   loadDetail();
 }
 
@@ -223,8 +217,7 @@ function distKm(lat1, lon1, lat2, lon2) {
   const dy = (lat2 - lat1) * rad;
   return 6371 * Math.sqrt(dx * dx + dy * dy);
 }
-map.on("click", (e) => {
-  const { lat, lng: lon } = e.latlng;
+function pickGround(lat, lon) {
   let best = null;
   for (const [ko, en, region, clat, clon] of CITIES) {
     const km = distKm(lat, lon, clat, clon);
@@ -241,7 +234,7 @@ map.on("click", (e) => {
     },
     { fly: false }
   );
-});
+}
 
 // ---------- 자동완성 검색 ----------
 const input = $("q");
@@ -313,10 +306,20 @@ input.addEventListener("keydown", (e) => {
 });
 input.addEventListener("blur", closeList);
 
+// ---------- 패널 접기/펼치기 (좁은 화면에서는 기본 접힘) ----------
+const panel = document.querySelector(".panel");
+function setCollapsed(c) {
+  panel.classList.toggle("collapsed", c);
+  $("toggle").setAttribute("aria-expanded", String(!c));
+  $("toggle").textContent = c ? "▸" : "▾";
+}
+$("toggle").addEventListener("click", () => setCollapsed(!panel.classList.contains("collapsed")));
+setCollapsed(window.matchMedia("(max-width: 520px)").matches);
+
 // ---------- 시작 ----------
 $("refresh").addEventListener("click", () => { loadOverview(); loadDetail(); });
 setInterval(() => { loadOverview(); loadDetail(); }, REFRESH_MS);
 
 loadOverview();
 const seoul = CITIES.find((c) => c[0] === "서울");
-selectPlace({ name: seoul[0], en: seoul[1], region: seoul[2], lat: seoul[3], lon: seoul[4] }, { fly: false });
+selectPlace({ name: seoul[0], en: seoul[1], region: seoul[2], lat: seoul[3], lon: seoul[4] }, { fly: false, expand: false });

@@ -3,15 +3,26 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>전국 날씨·미세먼지 지도</title>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+  <title>전국 날씨·미세먼지 3D 지도</title>
   <link rel="stylesheet" href="style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
 </head>
 <body>
-  <div id="map"></div>
+  <div id="scene"></div>
+  <div id="loading" class="loading">3D 지형 불러오는 중…</div>
 
   <aside class="panel">
-    <h1>전국 날씨 · 미세먼지</h1>
+    <div class="title">
+      <h1>전국 날씨 · 미세먼지 3D</h1>
+      <button id="toggle" type="button" class="ghost" aria-expanded="true" aria-label="상세 정보 접기/펼치기">▾</button>
+    </div>
 
     <div class="controls">
       <div class="search">
@@ -51,10 +62,15 @@
     <button type="button" data-layer="temp">기온</button>
   </div>
   <div class="legend" id="legend"></div>
+  <div class="hint">드래그 회전 · 휠 확대 · 우클릭 드래그 이동 · 막대 높이 = 수치</div>
+  <div class="attrib">
+    지도 © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> ·
+    지형 <a href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noopener">Terrain Tiles</a> ·
+    <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a>
+  </div>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
   <script src="cities.js"></script>
   <script src="search.js"></script>
-  <script src="app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>
