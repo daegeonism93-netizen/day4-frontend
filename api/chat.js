@@ -5,7 +5,7 @@ const { declarations, runTool } = require("./_lib/tools");
 
 // 모델 후보: 앞에서부터 시도하고, 모델을 찾지 못하면(404) 다음 후보로 넘어간다.
 // gemini-flash-latest 는 항상 최신 Flash 로 연결되는 별칭이라 모델 이름이 바뀌어도 안전하다.
-const MODELS = [...new Set([process.env.GEMINI_MODEL, "gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"].filter(Boolean))];
+const MODELS = [...new Set([process.env.GEMINI_MODEL, "gemini-3.1-flash-lite", "gemini-flash-latest", "gemini-2.5-flash"].filter(Boolean))];
 const BASE = process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta";
 const MAX_STEPS = 4;          // 도구 호출 왕복 최대 횟수
 const MAX_MESSAGES = 12;      // 대화 기록 최대 개수
