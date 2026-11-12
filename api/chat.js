@@ -3,7 +3,9 @@
 // GEMINI_API_KEY 는 Vercel 환경변수에만 둔다 (브라우저로 노출되지 않음)
 const { declarations, runTool } = require("./_lib/tools");
 
-const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+// 모델 후보: 앞에서부터 시도하고, 모델을 찾지 못하면(404) 다음 후보로 넘어간다.
+// gemini-flash-latest 는 항상 최신 Flash 로 연결되는 별칭이라 모델 이름이 바뀌어도 안전하다.
+const MODELS = [...new Set([process.env.GEMINI_MODEL, "gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"].filter(Boolean))];
 const BASE = process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta";
 const MAX_STEPS = 4;          // 도구 호출 왕복 최대 횟수
 const MAX_MESSAGES = 12;      // 대화 기록 최대 개수
@@ -33,26 +35,35 @@ function sanitizeMessages(raw) {
   return msgs;
 }
 
+let activeModel = 0; // 한 번 동작한 모델을 같은 인스턴스에서 계속 사용
+
 async function callGemini(contents, key) {
-  const res = await fetch(`${BASE}/models/${MODEL}:generateContent`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: SYSTEM }] },
-      contents,
-      tools: [{ functionDeclarations: declarations }],
-      toolConfig: { functionCallingConfig: { mode: "AUTO" } },
-      generationConfig: { temperature: 0.6 },
-    }),
+  const payload = JSON.stringify({
+    systemInstruction: { parts: [{ text: SYSTEM }] },
+    contents,
+    tools: [{ functionDeclarations: declarations }],
+    toolConfig: { functionCallingConfig: { mode: "AUTO" } },
+    generationConfig: { temperature: 0.6 },
   });
-  if (!res.ok) {
+  let lastErr;
+  for (let i = activeModel; i < MODELS.length; i++) {
+    const res = await fetch(`${BASE}/models/${MODELS[i]}:generateContent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+      body: payload,
+    });
+    if (res.ok) {
+      activeModel = i;
+      return res.json();
+    }
     const body = await res.text().catch(() => "");
-    const err = new Error(`Gemini API 오류 (HTTP ${res.status})`);
-    err.detail = body.slice(0, 300);
-    err.status = res.status;
-    throw err;
+    lastErr = new Error(`Gemini API 오류 (HTTP ${res.status}, 모델 ${MODELS[i]})`);
+    lastErr.detail = body.slice(0, 300);
+    lastErr.status = res.status;
+    lastErr.model = MODELS[i];
+    if (res.status !== 404) break; // 모델 없음(404)일 때만 다음 후보 시도
   }
-  return res.json();
+  throw lastErr;
 }
 
 function describeStep(name, args, result) {
@@ -128,6 +139,12 @@ module.exports = async (req, res) => {
   } catch (e) {
     console.error("chat error:", e.message, e.detail || "");
     const quota = e.status === 429;
-    res.status(502).json({ error: quota ? "AI 요청 한도를 초과했어요. 잠시 후 다시 시도해 주세요." : "AI 응답을 가져오지 못했어요. 잠시 후 다시 시도해 주세요." });
+    // Google 이 돌려준 오류 사유만 추려서 전달 (API 키는 포함되지 않음)
+    let reason = "";
+    try { reason = JSON.parse(e.detail).error?.message || ""; } catch { /* 본문이 JSON 이 아님 */ }
+    res.status(502).json({
+      error: quota ? "AI 요청 한도를 초과했어요. 잠시 후 다시 시도해 주세요." : "AI 응답을 가져오지 못했어요. 잠시 후 다시 시도해 주세요.",
+      detail: e.status ? `Gemini ${e.status} (${e.model})${reason ? `: ${reason.slice(0, 160)}` : ""}` : e.message,
+    });
   }
 };

@@ -100,7 +100,7 @@
       });
       const data = await res.json().catch(() => ({}));
       typing.remove();
-      if (!res.ok) throw new Error(data.error || `서버 오류 (${res.status})`);
+      if (!res.ok) throw new Error((data.error || `서버 오류 (${res.status})`) + (data.detail ? ` [${data.detail}]` : ""));
 
       addSteps(data.steps || []);
       addMsg("bot", data.reply);
