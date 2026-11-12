@@ -160,6 +160,35 @@ async function overpassSpots(g, cat, radiusM, keyword) {
     .filter(Boolean);
 }
 
+// 카카오 로컬 API (KAKAO_REST_API_KEY 가 있을 때만 사용): 한국 장소 데이터가 가장 정확하다
+const KAKAO_GROUP = { attraction: "AT4", cafe: "CE7", restaurant: "FD6", museum: "CT1" }; // 그 외는 키워드 검색
+async function kakaoSpots(g, cat, radiusM, keyword) {
+  const key = process.env.KAKAO_REST_API_KEY;
+  if (!key) return [];
+  const base = process.env.KAKAO_BASE_URL || "https://dapi.kakao.com";
+  const params = {
+    query: keyword || CATEGORIES[cat].word,
+    x: String(g.lon), y: String(g.lat),
+    radius: String(Math.min(radiusM, 20000)), // 카카오 최대 반경 20km
+    size: "15", sort: "accuracy",
+  };
+  if (KAKAO_GROUP[cat]) params.category_group_code = KAKAO_GROUP[cat];
+  const data = await fetchJson(`${base}/v2/local/search/keyword.json?${new URLSearchParams(params)}`, {
+    headers: { Authorization: `KakaoAK ${key}` }, timeoutMs: 6000,
+  });
+  return (data.documents || []).map((d, i) => ({
+    name: d.place_name,
+    category: CATEGORIES[cat].label,
+    lat: +d.y, lon: +d.x,
+    distance_km: +(Number(d.distance) / 1000 || distKm(g.lat, g.lon, +d.y, +d.x)).toFixed(1),
+    address: d.road_address_name || d.address_name || null,
+    opening_hours: null,
+    website: d.place_url || null,
+    phone: d.phone || null,
+    _score: 100 - i, // 카카오 정확도 순서를 유지
+  }));
+}
+
 // Photon(OSM 기반 검색): 위치 이름 + 태그 필터. Overpass 가 느릴 때의 대체 수단
 async function photonSpots(g, cat, keyword, location) {
   // 위치 이름만, 위치 + 카테고리 단어(예: "강릉 카페") 두 가지 검색어로 조회해 결과를 늘린다
@@ -220,9 +249,29 @@ async function findSpot({ location, category = "attraction", keyword, radius_km 
   const max = Math.min(Math.max(Number(limit) || 6, 1), 8);
   const kw = keyword ? String(keyword).slice(0, 30) : "";
 
+  const inRadius = (list) => list.filter((s) => s.distance_km <= radiusM / 1000);
+  const buildResult = (spots, source) => {
+    const seen = new Set();
+    const result = spots
+      .sort((a, b) => b._score - a._score || a.distance_km - b.distance_km)
+      .filter((s) => (seen.has(s.name) ? false : seen.add(s.name)))
+      .slice(0, max)
+      .map(({ _score, ...s }) => s);
+    return {
+      location, center: { lat: g.lat, lon: g.lon }, category: CATEGORIES[cat].label, source,
+      count: result.length, spots: result,
+      ...(result.length ? {} : { note: "검색 결과가 없습니다. 다른 category/keyword 나 더 넓은 radius_km 로 다시 시도해 보세요." }),
+    };
+  };
+
+  // 0) 카카오 키가 있으면 가장 먼저 시도 (실패·빈 결과면 아래 OSM 경로로 계속)
+  if (process.env.KAKAO_REST_API_KEY) {
+    const k = await kakaoSpots(g, cat, radiusM, kw).then(inRadius).catch(() => []);
+    if (k.length) return buildResult(k, "kakao");
+  }
+
   // 1) Overpass → 2) Photon → 3) Nominatim 순서로 시도 (앞선 소스가 비거나 실패하면 다음으로)
   // Overpass 와 Photon 을 동시에 시작하고, Overpass 가 3초 안에 결과를 주면 그것을, 아니면 Photon 을 쓴다.
-  const inRadius = (list) => list.filter((s) => s.distance_km <= radiusM / 1000);
   const op = overpassSpots(g, cat, radiusM, kw).then(inRadius).catch(() => []);
   const ph = photonSpots(g, cat, kw, location).then(inRadius).catch(() => []);
   let spots = [];
@@ -242,18 +291,7 @@ async function findSpot({ location, category = "attraction", keyword, radius_km 
     }
   }
 
-  const seen = new Set();
-  const result = spots
-    .sort((a, b) => b._score - a._score || a.distance_km - b.distance_km)
-    .filter((s) => (seen.has(s.name) ? false : seen.add(s.name)))
-    .slice(0, max)
-    .map(({ _score, ...s }) => s);
-
-  return {
-    location, center: { lat: g.lat, lon: g.lon }, category: CATEGORIES[cat].label, source,
-    count: result.length, spots: result,
-    ...(result.length ? {} : { note: "검색 결과가 없습니다. 다른 category/keyword 나 더 넓은 radius_km 로 다시 시도해 보세요." }),
-  };
+  return buildResult(spots, source);
 }
 
 // ---------- Gemini function declarations ----------
